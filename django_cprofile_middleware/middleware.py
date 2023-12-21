@@ -29,8 +29,7 @@ class ProfilerMiddleware(MiddlewareMixin):
     Optionally pass the following to modify the output:
 
     ?sort => Sort the output by a given metric. Default is time.
-        See
-        http://docs.python.org/2/library/profile.html#pstats.Stats.sort_stats
+        See http://docs.python.org/2/library/profile.html#pstats.Stats.sort_stats
         for all sort options.
 
     ?count => The number of rows to display. Default is 100.
@@ -41,21 +40,19 @@ class ProfilerMiddleware(MiddlewareMixin):
     This is adapted from an example found here:
     http://www.slideshare.net/zeeg/django-con-high-performance-django-presentation.
     """
+    PROFILER_REQUEST_ATTR_NAME = '_django_cprofile_middleware_profiler'
+
     def can(self, request):
-        requires_staff = getattr(
-            settings, "DJANGO_CPROFILE_MIDDLEWARE_REQUIRE_STAFF", True)
-
-        if requires_staff and not (request.user and request.user.is_staff):
-            return False
-
-        return settings.DEBUG and 'prof' in request.GET
+        return settings.DEBUG and 'prof' in request.GET and \
+            request.user is not None and request.user.is_staff
 
     def process_view(self, request, callback, callback_args, callback_kwargs):
         if self.can(request):
-            self.profiler = profile.Profile()
+            profiler = profile.Profile()
+            setattr(request, self.PROFILER_REQUEST_ATTR_NAME, profiler)
             args = (request,) + callback_args
             try:
-                return self.profiler.runcall(
+                return profiler.runcall(
                     callback, *args, **callback_kwargs)
             except Exception:
                 # we want the process_exception middleware to fire
@@ -63,12 +60,13 @@ class ProfilerMiddleware(MiddlewareMixin):
                 return
 
     def process_response(self, request, response):
-        if self.can(request):
-            self.profiler.create_stats()
+        if hasattr(request, self.PROFILER_REQUEST_ATTR_NAME):
+            profiler = getattr(request, self.PROFILER_REQUEST_ATTR_NAME)
+            profiler.create_stats()
             if 'download' in request.GET:
                 import marshal
 
-                output = marshal.dumps(self.profiler.stats)
+                output = marshal.dumps(profiler.stats)
                 response = HttpResponse(
                     output, content_type='application/octet-stream')
                 response['Content-Disposition'] = 'attachment;' \
@@ -76,7 +74,7 @@ class ProfilerMiddleware(MiddlewareMixin):
                 response['Content-Length'] = len(output)
             else:
                 io = StringIO()
-                stats = pstats.Stats(self.profiler, stream=io)
+                stats = pstats.Stats(profiler, stream=io)
 
                 stats.strip_dirs().sort_stats(request.GET.get('sort', 'time'))
                 stats.print_stats(int(request.GET.get('count', 100)))
